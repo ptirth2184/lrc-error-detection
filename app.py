@@ -654,7 +654,339 @@ def show_calculate_phase():
 def show_transmit_phase():
     """Show transmission simulation interface"""
     st.header("📡 Step 3: Transmission Simulation")
-    st.write("Placeholder for transmission interface - to be implemented in next task")
+    
+    # Check if we have a transmission package
+    if not st.session_state.transmission_package:
+        st.error("❌ No transmission package available. Please go back and generate LRC first.")
+        if st.button("⬅️ Back to LRC Generation"):
+            st.session_state.current_phase = 'calculate'
+            st.rerun()
+        return
+    
+    package = st.session_state.transmission_package
+    
+    # Show transmission package summary
+    st.subheader("📦 Transmission Package")
+    
+    summary_cols = st.columns(4)
+    with summary_cols[0]:
+        st.metric("Data Blocks", len(package['data_blocks']))
+    with summary_cols[1]:
+        st.metric("Total Bits", package['total_bits'])
+    with summary_cols[2]:
+        st.metric("LRC Byte", package['lrc_byte'])
+    with summary_cols[3]:
+        st.metric("Package ID", package['package_id'])
+    
+    # Transmission options
+    st.subheader("🛠️ Transmission Options")
+    
+    transmission_tabs = st.tabs(["📡 Normal Transmission", "⚠️ Error Injection", "📊 Transmission Log"])
+    
+    with transmission_tabs[0]:
+        st.write("**Normal Transmission (No Errors)**")
+        st.write("Simulate perfect transmission where all data arrives intact.")
+        
+        col1, col2, col3 = st.columns([1, 1, 1])
+        with col2:
+            if st.button("📡 Transmit Data", type="primary", use_container_width=True):
+                try:
+                    with st.spinner("Transmitting data..."):
+                        # Simulate transmission
+                        received_package = st.session_state.simulator.transmit_data(package)
+                        st.session_state.received_package = received_package
+                        
+                        st.success("✅ Data transmitted successfully!")
+                        
+                        # Show transmission details
+                        st.write("**Transmission Details:**")
+                        details_cols = st.columns(2)
+                        
+                        with details_cols[0]:
+                            st.write(f"**Transmission ID:** {received_package['transmission_id']}")
+                            st.write(f"**Status:** {received_package['transmission_status']}")
+                            st.write(f"**Errors Injected:** {received_package['errors_injected']}")
+                        
+                        with details_cols[1]:
+                            st.write(f"**Transmission Time:** {received_package['transmission_time'].strftime('%H:%M:%S')}")
+                            st.write(f"**Received Time:** {received_package['received_time'].strftime('%H:%M:%S')}")
+                        
+                        # Show received data
+                        st.write("**Received Data:**")
+                        received_blocks = []
+                        for i, block in enumerate(received_package['data_blocks']):
+                            received_blocks.append({
+                                'Block #': i + 1,
+                                'Received Binary': block,
+                                'Decimal': int(block, 2),
+                                'Character': chr(int(block, 2)) if 32 <= int(block, 2) <= 126 else '·'
+                            })
+                        
+                        st.dataframe(received_blocks, use_container_width=True, hide_index=True)
+                        st.write(f"**Received LRC:** {received_package['lrc_byte']}")
+                        
+                        # Auto-advance option
+                        st.balloons()
+                        if st.button("➡️ Proceed to Verification", type="secondary"):
+                            st.session_state.current_phase = 'verify'
+                            st.rerun()
+                        
+                except Exception as e:
+                    st.error(f"❌ Transmission failed: {str(e)}")
+    
+    with transmission_tabs[1]:
+        st.write("**Error Injection Options**")
+        st.write("Simulate transmission errors to demonstrate LRC error detection capabilities.")
+        
+        # Error injection type selection
+        error_type = st.radio(
+            "Select error injection method:",
+            ["manual", "random", "burst"],
+            format_func=lambda x: {
+                "manual": "Manual Bit Selection",
+                "random": "Random Error Rate", 
+                "burst": "Burst Error"
+            }[x],
+            help="Choose how errors should be injected into the transmitted data"
+        )
+        
+        if error_type == "manual":
+            st.write("**Manual Bit Selection**")
+            st.write("Select specific bits to corrupt during transmission.")
+            
+            # Show data blocks for selection
+            st.write("**Select bits to corrupt:**")
+            
+            error_positions = []
+            
+            # Create selection interface for each block
+            for block_idx, block in enumerate(package['data_blocks']):
+                st.write(f"**Block {block_idx + 1}: {block}**")
+                
+                bit_cols = st.columns(8)
+                for bit_idx, bit in enumerate(block):
+                    with bit_cols[bit_idx]:
+                        if st.checkbox(
+                            f"{bit}", 
+                            key=f"bit_{block_idx}_{bit_idx}",
+                            help=f"Block {block_idx + 1}, Bit {bit_idx + 1}"
+                        ):
+                            error_positions.append((block_idx, bit_idx))
+            
+            # LRC corruption option
+            st.write(f"**LRC Byte: {package['lrc_byte']}**")
+            lrc_cols = st.columns(8)
+            for bit_idx, bit in enumerate(package['lrc_byte']):
+                with lrc_cols[bit_idx]:
+                    if st.checkbox(
+                        f"{bit}", 
+                        key=f"lrc_bit_{bit_idx}",
+                        help=f"LRC Bit {bit_idx + 1}"
+                    ):
+                        error_positions.append((-1, bit_idx))  # -1 indicates LRC byte
+            
+            if error_positions:
+                st.write(f"**Selected {len(error_positions)} bit(s) for corruption**")
+                
+                if st.button("📡 Transmit with Manual Errors", type="primary"):
+                    try:
+                        with st.spinner("Injecting errors and transmitting..."):
+                            # Inject manual errors
+                            data_errors = [(block, bit) for block, bit in error_positions if block >= 0]
+                            
+                            if data_errors:
+                                corrupted_package = st.session_state.injector.inject_manual_error(
+                                    package, data_errors
+                                )
+                            else:
+                                corrupted_package = package.copy()
+                            
+                            # Handle LRC errors separately
+                            lrc_errors = [(bit) for block, bit in error_positions if block == -1]
+                            if lrc_errors:
+                                lrc_byte = corrupted_package.get('lrc_byte', package['lrc_byte'])
+                                for bit_pos in lrc_errors:
+                                    lrc_byte = st.session_state.injector.flip_bit(lrc_byte, bit_pos)
+                                corrupted_package['lrc_byte'] = lrc_byte
+                            
+                            # Transmit corrupted data
+                            received_package = st.session_state.simulator.transmit_data(corrupted_package)
+                            st.session_state.received_package = received_package
+                            
+                            st.success(f"✅ Data transmitted with {len(error_positions)} error(s) injected!")
+                            
+                            # Show error injection summary
+                            st.write("**Error Injection Summary:**")
+                            for block_idx, bit_idx in error_positions:
+                                if block_idx >= 0:
+                                    original_bit = package['data_blocks'][block_idx][bit_idx]
+                                    corrupted_bit = '0' if original_bit == '1' else '1'
+                                    st.write(f"• Block {block_idx + 1}, Bit {bit_idx + 1}: {original_bit} → {corrupted_bit}")
+                                else:
+                                    original_bit = package['lrc_byte'][bit_idx]
+                                    corrupted_bit = '0' if original_bit == '1' else '1'
+                                    st.write(f"• LRC Byte, Bit {bit_idx + 1}: {original_bit} → {corrupted_bit}")
+                            
+                            if st.button("➡️ Proceed to Verification", type="secondary"):
+                                st.session_state.current_phase = 'verify'
+                                st.rerun()
+                            
+                    except Exception as e:
+                        st.error(f"❌ Error injection failed: {str(e)}")
+            else:
+                st.info("Select at least one bit to corrupt before transmitting.")
+        
+        elif error_type == "random":
+            st.write("**Random Error Injection**")
+            st.write("Inject random errors based on a specified error rate.")
+            
+            error_rate = st.slider(
+                "Error Rate (%)",
+                min_value=0.0,
+                max_value=50.0,
+                value=10.0,
+                step=1.0,
+                help="Percentage chance that each bit will be corrupted"
+            ) / 100.0
+            
+            total_bits = package['total_bits'] + 8  # Include LRC byte
+            expected_errors = int(total_bits * error_rate)
+            
+            st.write(f"**Expected errors:** ~{expected_errors} out of {total_bits} total bits")
+            
+            if st.button("📡 Transmit with Random Errors", type="primary"):
+                try:
+                    with st.spinner("Injecting random errors and transmitting..."):
+                        # Inject random errors
+                        corrupted_package = st.session_state.injector.inject_random_error(
+                            package, error_rate
+                        )
+                        
+                        # Transmit corrupted data
+                        received_package = st.session_state.simulator.transmit_data(corrupted_package)
+                        st.session_state.received_package = received_package
+                        
+                        actual_errors = corrupted_package.get('actual_errors', 0)
+                        st.success(f"✅ Data transmitted with {actual_errors} random error(s) injected!")
+                        
+                        # Show error summary
+                        if 'error_summary' in corrupted_package:
+                            st.write("**Error Injection Summary:**")
+                            for error in corrupted_package['error_summary']:
+                                st.write(f"• Block {error['block_index'] + 1}, Bit {error['bit_position'] + 1}: "
+                                        f"{error['original_bit']} → {error['corrupted_bit']}")
+                        
+                        if st.button("➡️ Proceed to Verification", type="secondary"):
+                            st.session_state.current_phase = 'verify'
+                            st.rerun()
+                        
+                except Exception as e:
+                    st.error(f"❌ Random error injection failed: {str(e)}")
+        
+        elif error_type == "burst":
+            st.write("**Burst Error Injection**")
+            st.write("Inject consecutive bit errors in a single block (simulates interference).")
+            
+            if package['data_blocks']:
+                burst_col1, burst_col2, burst_col3 = st.columns(3)
+                
+                with burst_col1:
+                    block_index = st.selectbox(
+                        "Select block:",
+                        range(len(package['data_blocks'])),
+                        format_func=lambda x: f"Block {x + 1}"
+                    )
+                
+                with burst_col2:
+                    start_position = st.selectbox(
+                        "Start position:",
+                        range(8),
+                        format_func=lambda x: f"Bit {x + 1}"
+                    )
+                
+                with burst_col3:
+                    max_length = 8 - start_position
+                    burst_length = st.selectbox(
+                        "Burst length:",
+                        range(1, max_length + 1),
+                        format_func=lambda x: f"{x} bit{'s' if x > 1 else ''}"
+                    )
+                
+                # Show preview of burst error
+                original_block = package['data_blocks'][block_index]
+                preview_block = list(original_block)
+                for i in range(burst_length):
+                    pos = start_position + i
+                    preview_block[pos] = '0' if preview_block[pos] == '1' else '1'
+                
+                st.write(f"**Preview:** {original_block} → {''.join(preview_block)}")
+                
+                if st.button("📡 Transmit with Burst Error", type="primary"):
+                    try:
+                        with st.spinner("Injecting burst error and transmitting..."):
+                            # Inject burst error
+                            corrupted_package = st.session_state.injector.inject_burst_error(
+                                package, block_index, start_position, burst_length
+                            )
+                            
+                            # Transmit corrupted data
+                            received_package = st.session_state.simulator.transmit_data(corrupted_package)
+                            st.session_state.received_package = received_package
+                            
+                            st.success(f"✅ Data transmitted with burst error ({burst_length} bits) injected!")
+                            
+                            # Show burst error details
+                            st.write("**Burst Error Details:**")
+                            st.write(f"• Block: {block_index + 1}")
+                            st.write(f"• Start Position: {start_position + 1}")
+                            st.write(f"• Length: {burst_length} bits")
+                            st.write(f"• Original: {original_block}")
+                            st.write(f"• Corrupted: {''.join(preview_block)}")
+                            
+                            if st.button("➡️ Proceed to Verification", type="secondary"):
+                                st.session_state.current_phase = 'verify'
+                                st.rerun()
+                            
+                    except Exception as e:
+                        st.error(f"❌ Burst error injection failed: {str(e)}")
+    
+    with transmission_tabs[2]:
+        st.write("**Transmission Log**")
+        
+        # Get transmission log
+        log_entries = st.session_state.simulator.get_transmission_log()
+        
+        if log_entries:
+            st.write(f"**{len(log_entries)} log entries:**")
+            
+            # Show log in expandable sections
+            for i, entry in enumerate(reversed(log_entries[-10:])):  # Show last 10 entries
+                with st.expander(f"Entry {len(log_entries) - i}: {entry.split(']')[1].split(':')[0] if ']' in entry else 'Log'}", expanded=i==0):
+                    st.code(entry, language=None)
+        else:
+            st.info("No transmission log entries yet. Perform a transmission to see logs.")
+        
+        # Clear log button
+        if st.button("🗑️ Clear Log", type="secondary"):
+            st.session_state.simulator.clear_transmission_log()
+            st.rerun()
+    
+    # Navigation
+    st.divider()
+    nav_col1, nav_col2, nav_col3 = st.columns([1, 1, 1])
+    
+    with nav_col1:
+        if st.button("⬅️ Back to LRC Generation", type="secondary"):
+            st.session_state.current_phase = 'calculate'
+            st.rerun()
+    
+    with nav_col3:
+        if st.session_state.received_package:
+            if st.button("🔍 Proceed to Verification", type="primary"):
+                st.session_state.current_phase = 'verify'
+                st.rerun()
+        else:
+            st.write("*Complete transmission first*")
 
 
 def show_verify_phase():
