@@ -1,0 +1,1 @@
+# Core modules for LRC Error Detection System
