@@ -389,10 +389,11 @@ def show_input_phase():
                         # Show binary processing details
                         st.write("**Binary Processing Details:**")
                         st.write(f"**Original Input:** `{user_input}`")
-                        st.write(f"**Cleaned Binary:** `{user_input.replace(' ', '').replace('\\n', '')}`")
+                        cleaned_binary = user_input.replace(' ', '').replace('\n', '')
+                        st.write(f"**Cleaned Binary:** `{cleaned_binary}`")
                         st.write(f"**Formatted Output:** `{result['formatted_binary']}`")
                         
-                        if len(user_input.replace(' ', '').replace('\n', '')) % 8 != 0:
+                        if len(cleaned_binary) % 8 != 0:
                             st.info("ℹ️ Input was padded with zeros to create complete 8-bit blocks")
                 
                 with tab3:
@@ -992,7 +993,401 @@ def show_transmit_phase():
 def show_verify_phase():
     """Show verification interface"""
     st.header("🔍 Step 4: Data Verification")
-    st.write("Placeholder for verification interface - to be implemented in next task")
+    
+    # Check if we have received data
+    if not st.session_state.received_package:
+        st.error("❌ No received data available. Please go back and complete transmission first.")
+        if st.button("⬅️ Back to Transmission"):
+            st.session_state.current_phase = 'transmit'
+            st.rerun()
+        return
+    
+    received_package = st.session_state.received_package
+    
+    # Show received data summary
+    st.subheader("📥 Received Data Summary")
+    
+    summary_cols = st.columns(5)
+    with summary_cols[0]:
+        st.metric("Transmission ID", received_package.get('transmission_id', 'N/A'))
+    with summary_cols[1]:
+        st.metric("Data Blocks", len(received_package['data_blocks']))
+    with summary_cols[2]:
+        st.metric("Total Bits", sum(len(block) for block in received_package['data_blocks']))
+    with summary_cols[3]:
+        st.metric("Received LRC", received_package['lrc_byte'])
+    with summary_cols[4]:
+        error_status = "Yes" if received_package.get('errors_injected', False) else "No"
+        st.metric("Errors Injected", error_status)
+    
+    # Verification process
+    st.subheader("🔍 LRC Verification Process")
+    
+    # Check if verification has been performed
+    if not st.session_state.verification_result:
+        st.write("**Ready to verify data integrity using LRC error detection.**")
+        
+        with st.expander("🧠 How LRC Verification Works", expanded=True):
+            st.write("""
+            **LRC Verification Process:**
+            
+            1. **Extract Data:** Separate received data blocks from LRC byte
+            2. **Recalculate LRC:** Perform XOR operations on received data blocks
+            3. **Compare:** Check if recalculated LRC matches received LRC
+            4. **Result:** 
+               - **Match** → No errors detected (data is intact)
+               - **Mismatch** → Errors detected (data was corrupted)
+            
+            This process demonstrates how error detection codes work in real networks!
+            """)
+        
+        col1, col2, col3 = st.columns([1, 1, 1])
+        with col2:
+            if st.button("🔍 Verify Data Integrity", type="primary", use_container_width=True):
+                try:
+                    with st.spinner("Verifying data integrity..."):
+                        # Process received data
+                        processed_data = st.session_state.receiver.process_received_data(received_package)
+                        
+                        # Perform error detection
+                        is_valid, error_message, error_report = st.session_state.receiver.detect_errors()
+                        
+                        # Generate comparison report
+                        comparison_report = st.session_state.receiver.generate_comparison_report()
+                        
+                        # Store results
+                        st.session_state.verification_result = {
+                            'is_valid': is_valid,
+                            'error_message': error_message,
+                            'error_report': error_report,
+                            'comparison_report': comparison_report,
+                            'processed_data': processed_data
+                        }
+                        
+                        st.rerun()
+                        
+                except Exception as e:
+                    st.error(f"❌ Verification failed: {str(e)}")
+    
+    else:
+        # Show verification results
+        verification = st.session_state.verification_result
+        is_valid = verification['is_valid']
+        error_message = verification['error_message']
+        comparison_report = verification['comparison_report']
+        
+        # Show verification result
+        if is_valid:
+            st.success(f"✅ {error_message}")
+            st.balloons()
+        else:
+            st.error(f"❌ {error_message}")
+        
+        # Create tabs for detailed results
+        result_tabs = st.tabs(["📊 Summary", "📋 Data Comparison", "🔢 LRC Verification", "📚 Analysis", "💡 Recommendations"])
+        
+        with result_tabs[0]:
+            st.subheader("📊 Verification Summary")
+            
+            # Summary metrics
+            summary = comparison_report['summary']
+            
+            metric_cols = st.columns(3)
+            with metric_cols[0]:
+                status_color = "normal" if is_valid else "inverse"
+                st.metric("Transmission Status", summary['Transmission Status'])
+            with metric_cols[1]:
+                st.metric("LRC Match", summary['LRC Match'])
+            with metric_cols[2]:
+                st.metric("Blocks Verified", summary['Data Blocks Received'])
+            
+            # Detailed summary table
+            st.write("**Detailed Summary:**")
+            summary_data = []
+            for key, value in summary.items():
+                summary_data.append({"Metric": key, "Value": str(value)})
+            
+            st.dataframe(summary_data, use_container_width=True, hide_index=True)
+        
+        with result_tabs[1]:
+            st.subheader("📋 Data Block Comparison")
+            
+            # Show received vs expected data
+            data_comparison = comparison_report['data_comparison']
+            
+            if data_comparison:
+                st.write("**Received Data Blocks:**")
+                st.dataframe(data_comparison, use_container_width=True, hide_index=True)
+                
+                # Visual comparison if errors were injected
+                if received_package.get('errors_injected', False):
+                    st.write("**Visual Error Highlighting:**")
+                    
+                    # Get original package for comparison
+                    original_package = st.session_state.transmission_package
+                    
+                    if original_package:
+                        st.write("**Original vs Received Comparison:**")
+                        
+                        for i, (orig_block, recv_block) in enumerate(zip(
+                            original_package['data_blocks'], 
+                            received_package['data_blocks']
+                        )):
+                            if orig_block != recv_block:
+                                st.write(f"**Block {i + 1} - ERROR DETECTED:**")
+                                
+                                # Highlight differences
+                                diff_html = ""
+                                for j, (orig_bit, recv_bit) in enumerate(zip(orig_block, recv_block)):
+                                    if orig_bit != recv_bit:
+                                        diff_html += f"<span style='background-color: #ffcccc; font-weight: bold;'>{recv_bit}</span>"
+                                    else:
+                                        diff_html += recv_bit
+                                
+                                col1, col2 = st.columns(2)
+                                with col1:
+                                    st.write(f"Original: `{orig_block}`")
+                                with col2:
+                                    st.markdown(f"Received: {diff_html}", unsafe_allow_html=True)
+                            else:
+                                st.write(f"**Block {i + 1} - OK:** `{recv_block}`")
+            else:
+                st.info("No data comparison available.")
+        
+        with result_tabs[2]:
+            st.subheader("🔢 LRC Verification Details")
+            
+            # LRC comparison
+            lrc_comparison = comparison_report['lrc_comparison']
+            
+            st.write("**LRC Comparison:**")
+            
+            lrc_col1, lrc_col2 = st.columns(2)
+            
+            with lrc_col1:
+                st.write("**Received LRC:**")
+                received_lrc_info = lrc_comparison['Received LRC']
+                st.write(f"• Binary: `{received_lrc_info['Binary']}`")
+                st.write(f"• Decimal: {received_lrc_info['Decimal']}")
+                st.write(f"• Source: {received_lrc_info['Source']}")
+            
+            with lrc_col2:
+                st.write("**Calculated LRC:**")
+                calculated_lrc_info = lrc_comparison['Calculated LRC']
+                st.write(f"• Binary: `{calculated_lrc_info['Binary']}`")
+                st.write(f"• Decimal: {calculated_lrc_info['Decimal']}")
+                st.write(f"• Source: {calculated_lrc_info['Source']}")
+            
+            # Match result
+            match_result = lrc_comparison['Match']
+            if match_result:
+                st.success("✅ LRC values match - No errors detected")
+            else:
+                st.error("❌ LRC values differ - Errors detected")
+                st.write(f"**Difference:** {lrc_comparison['Difference']}")
+            
+            # Verification steps
+            verification_steps = comparison_report['verification_steps']
+            if verification_steps:
+                st.write("**Verification Steps:**")
+                st.dataframe(verification_steps, use_container_width=True, hide_index=True)
+        
+        with result_tabs[3]:
+            st.subheader("📚 Error Analysis")
+            
+            # Educational explanations
+            explanations = comparison_report['educational_explanations']
+            
+            st.write("**What Happened:**")
+            for i, explanation in enumerate(explanations, 1):
+                st.write(f"{i}. {explanation}")
+            
+            # Error analysis
+            error_analysis = comparison_report['error_analysis']
+            
+            st.write("**Technical Analysis:**")
+            analysis_data = []
+            for key, value in error_analysis.items():
+                analysis_data.append({"Aspect": key.replace('_', ' ').title(), "Result": str(value)})
+            
+            st.dataframe(analysis_data, use_container_width=True, hide_index=True)
+            
+            # Show error patterns if available
+            if received_package.get('errors_injected', False) and 'error_summary' in received_package:
+                st.write("**Injected Error Details:**")
+                
+                error_summary = received_package['error_summary']
+                error_details = []
+                
+                for error in error_summary:
+                    error_details.append({
+                        "Block": f"Block {error['block_index'] + 1}",
+                        "Bit Position": error['bit_position'] + 1,
+                        "Original": error['original_bit'],
+                        "Corrupted": error['corrupted_bit'],
+                        "Effect": f"{error['original_bit']} → {error['corrupted_bit']}"
+                    })
+                
+                st.dataframe(error_details, use_container_width=True, hide_index=True)
+        
+        with result_tabs[4]:
+            st.subheader("💡 Recommendations & Next Steps")
+            
+            # Recommendations
+            recommendations = comparison_report['recommendations']
+            
+            st.write("**Recommendations:**")
+            for i, recommendation in enumerate(recommendations, 1):
+                st.write(f"{i}. {recommendation}")
+            
+            # Learning opportunities
+            st.write("**Learning Opportunities:**")
+            
+            learning_cols = st.columns(2)
+            
+            with learning_cols[0]:
+                st.write("**Try These Experiments:**")
+                experiments = [
+                    "Inject errors in different blocks",
+                    "Try multiple single-bit errors",
+                    "Test burst errors of different lengths",
+                    "Compare random vs manual error injection",
+                    "Observe LRC limitations with even-bit errors"
+                ]
+                
+                for experiment in experiments:
+                    st.write(f"• {experiment}")
+            
+            with learning_cols[1]:
+                st.write("**Key Takeaways:**")
+                takeaways = [
+                    "LRC detects single-bit errors reliably",
+                    "XOR operations are fundamental to error detection",
+                    "Simple codes have limitations but are efficient",
+                    "Error detection vs error correction trade-offs",
+                    "Real networks use more sophisticated codes"
+                ]
+                
+                for takeaway in takeaways:
+                    st.write(f"• {takeaway}")
+        
+        # Action buttons
+        st.divider()
+        action_cols = st.columns([1, 1, 1, 1])
+        
+        with action_cols[0]:
+            if st.button("🔄 Try Different Errors", type="secondary"):
+                st.session_state.current_phase = 'transmit'
+                st.session_state.verification_result = None
+                st.rerun()
+        
+        with action_cols[1]:
+            if st.button("📝 New Input Data", type="secondary"):
+                # Clear all session state for fresh start
+                st.session_state.current_phase = 'input'
+                st.session_state.transmission_package = None
+                st.session_state.received_package = None
+                st.session_state.verification_result = None
+                st.session_state.sender.clear_history()
+                st.session_state.receiver.clear_history()
+                st.rerun()
+        
+        with action_cols[2]:
+            if st.button("📊 View All Results", type="secondary"):
+                # Show complete workflow summary
+                show_complete_workflow_summary()
+        
+        with action_cols[3]:
+            if st.button("💾 Export Results", type="secondary"):
+                # Generate downloadable report
+                generate_downloadable_report(verification)
+    
+    # Navigation
+    st.divider()
+    nav_col1, nav_col2 = st.columns([1, 1])
+    
+    with nav_col1:
+        if st.button("⬅️ Back to Transmission", type="secondary"):
+            st.session_state.current_phase = 'transmit'
+            st.rerun()
+    
+    with nav_col2:
+        if st.session_state.verification_result:
+            st.success("🎉 Verification Complete!")
+        else:
+            st.write("*Complete verification first*")
+
+
+def show_complete_workflow_summary():
+    """Show complete workflow summary in an expander"""
+    with st.expander("📊 Complete Workflow Summary", expanded=True):
+        st.write("**End-to-End LRC Demonstration Summary**")
+        
+        # Input phase summary
+        if st.session_state.sender.get_processing_history():
+            latest_input = st.session_state.sender.get_processing_history()[-1]
+            st.write(f"**1. Input:** {latest_input['input']} ({latest_input['type']})")
+        
+        # LRC calculation summary
+        if st.session_state.transmission_package:
+            package = st.session_state.transmission_package
+            st.write(f"**2. LRC Generated:** {package['lrc_byte']} ({len(package['data_blocks'])} blocks)")
+        
+        # Transmission summary
+        if st.session_state.received_package:
+            received = st.session_state.received_package
+            error_status = "with errors" if received.get('errors_injected', False) else "without errors"
+            st.write(f"**3. Transmission:** Completed {error_status}")
+        
+        # Verification summary
+        if st.session_state.verification_result:
+            verification = st.session_state.verification_result
+            result = "PASSED" if verification['is_valid'] else "FAILED"
+            st.write(f"**4. Verification:** {result} - {verification['error_message']}")
+
+
+def generate_downloadable_report(verification):
+    """Generate downloadable verification report"""
+    import json
+    from datetime import datetime
+    
+    # Create comprehensive report
+    report = {
+        "timestamp": datetime.now().isoformat(),
+        "verification_result": verification['is_valid'],
+        "error_message": verification['error_message'],
+        "summary": verification['comparison_report']['summary'],
+        "educational_explanations": verification['comparison_report']['educational_explanations'],
+        "recommendations": verification['comparison_report']['recommendations']
+    }
+    
+    # Add input data if available
+    if st.session_state.sender.get_processing_history():
+        latest_input = st.session_state.sender.get_processing_history()[-1]
+        report["input_data"] = {
+            "original_input": latest_input['input'],
+            "input_type": latest_input['type']
+        }
+    
+    # Add transmission data if available
+    if st.session_state.transmission_package:
+        package = st.session_state.transmission_package
+        report["transmission_data"] = {
+            "data_blocks": package['data_blocks'],
+            "lrc_byte": package['lrc_byte'],
+            "total_bits": package['total_bits']
+        }
+    
+    # Convert to JSON string
+    report_json = json.dumps(report, indent=2)
+    
+    # Provide download button
+    st.download_button(
+        label="📄 Download Report (JSON)",
+        data=report_json,
+        file_name=f"lrc_verification_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+        mime="application/json"
+    )
 
 
 if __name__ == "__main__":
